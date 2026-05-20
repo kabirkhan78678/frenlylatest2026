@@ -1,6 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import Joi from 'joi';
-import { emitSocketEvent, markMessagesAsSeen } from '../utils/socket.js'; // Assuming you have this utility function
+import { emitSocketEvent } from '../utils/socket.js'; // Assuming you have this utility function
 import { ChatEventEnum } from '../utils/constants.js';
 
 import dotenv from "dotenv";
@@ -298,30 +298,13 @@ export async function getAllChats(req, res) {
         //     return chat;
         // }));
         await Promise.all(chats.map(async (chat) => {
-            const unreadCount = await prisma.chatMessage.count({
+            const unreadCountData = await prisma.unreadCount.findFirst({
                 where: {
                     chatId: chat.id,
-                    senderId: { not: req.user.id },
-                    seen: false,
+                    userId: req.user.id
                 }
             });
-
-            chat.unreadCount = unreadCount;
-
-            await prisma.unreadCount.upsert({
-                where: {
-                    userId_chatId: {
-                        userId: req.user.id,
-                        chatId: chat.id,
-                    },
-                },
-                update: { unreadCount },
-                create: {
-                    userId: req.user.id,
-                    chatId: chat.id,
-                    unreadCount,
-                },
-            });
+            chat.unreadCount = unreadCountData ? unreadCountData.unreadCount : 0;
         }));
         return res.status(200).json({
             status: 200,
@@ -393,7 +376,6 @@ export async function deleteChat(req, res) {
 export async function activateDeactivateChat(req, res) {
     try {
         const { chatId } = req.body;
-        const chatIdInt = Number(chatId);
         const schema = Joi.alternatives(Joi.object({
             chatId: Joi.number().required()
         }))
@@ -411,7 +393,7 @@ export async function activateDeactivateChat(req, res) {
         const isActivateChat = await prisma.activeChat.findFirst({
             where: {
                 userId: req.user.id,
-                chatId: chatIdInt
+                chatId: chatId
             }
         })
         if (isActivateChat) {
@@ -428,58 +410,12 @@ export async function activateDeactivateChat(req, res) {
 
         }
         else {
-            await prisma.activeChat.create({
+            const activateChat = await prisma.activeChat.create({
                 data: {
                     userId: req.user.id,
-                    chatId: chatIdInt
+                    chatId: chatId
                 }
             })
-
-            const io = req.app.get('io');
-            if (io && typeof markMessagesAsSeen === 'function') {
-                await markMessagesAsSeen(chatIdInt, req.user.id, io);
-            } else {
-                const unseenMessages = await prisma.chatMessage.findMany({
-                    where: {
-                        chatId: chatIdInt,
-                        senderId: { not: req.user.id },
-                        seen: false,
-                    },
-                    select: { id: true },
-                });
-
-                const messageIds = unseenMessages.map((message) => message.id);
-
-                if (messageIds.length > 0) {
-                    await prisma.chatMessage.updateMany({
-                        where: { id: { in: messageIds } },
-                        data: { seen: true, is_read: true },
-                    });
-                }
-
-                await prisma.unreadCount.upsert({
-                    where: {
-                        userId_chatId: {
-                            userId: req.user.id,
-                            chatId: chatIdInt,
-                        },
-                    },
-                    update: { unreadCount: 0 },
-                    create: {
-                        userId: req.user.id,
-                        chatId: chatIdInt,
-                        unreadCount: 0,
-                    },
-                });
-
-                emitSocketEvent(req, req.user.id.toString(), ChatEventEnum.UNREAD_COUNT_UPDATED, {
-                    chatId: chatIdInt,
-                    userId: req.user.id,
-                    unreadCount: 0,
-                    increment: 0,
-                });
-            }
-
             return res.status(200).json({
                 status: 200,
                 message: 'Chat Activated',
@@ -507,99 +443,45 @@ export async function createMessageREST(req, res) {
         const { chatId } = req.params;
         const { content, isLink, isLinkId, isUrl } = req.body;
         const senderId = req.user.id;
-        const chatIdInt = parseInt(chatId);
 
         const newMessage = await prisma.chatMessage.create({
             data: {
-                chatId: chatIdInt,
+                chatId: parseInt(chatId),
                 content: content ?? null,
                 senderId,
                 isLink: isLink ? 1 : 0,
                 isLinkId: isLinkId ?? null,
                 isUrl: isUrl ?? null,
-                seen: false,
-                is_read: false,
             },
         });
 
-        await prisma.chat.update({ where: { id: chatIdInt }, data: { lastMessageId: newMessage.id } });
+        await prisma.chat.update({ where: { id: parseInt(chatId) }, data: { lastMessageId: newMessage.id } });
 
         // get participants and update unreadCount, emit events
-        const chat = await prisma.chat.findUnique({ where: { id: chatIdInt }, include: { participants: true } });
+        const chat = await prisma.chat.findUnique({ where: { id: parseInt(chatId) }, include: { participants: true } });
         const otherParticipants = (chat.participants || []).filter((p) => p.id !== senderId);
-        const io = req.app.get('io');
-        let userIdsInRoom = new Set();
-
-        if (io) {
-            const socketsInRoom = await io.in(chatIdInt.toString()).fetchSockets();
-            userIdsInRoom = new Set(socketsInRoom.map((socket) => Number(socket.user?.id)).filter(Boolean));
-        }
-
-        let anyReceiverInRoom = false;
 
         for (const participant of otherParticipants) {
-            if (userIdsInRoom.has(participant.id)) {
-                anyReceiverInRoom = true;
-                await prisma.chatMessage.update({
-                    where: { id: newMessage.id },
-                    data: { seen: true, is_read: true },
-                });
-                emitSocketEvent(req, participant.id.toString(), ChatEventEnum.UNREAD_COUNT_UPDATED, {
-                    chatId: chatIdInt,
-                    userId: participant.id,
-                    unreadCount: 0,
-                    increment: 0,
-                });
-                continue;
-            }
-
-            const isActiveChat = await prisma.activeChat.findFirst({
-                where: {
-                    userId: participant.id,
-                    chatId: chatIdInt,
-                },
-            });
-
-            if (isActiveChat) {
-                anyReceiverInRoom = true;
-                await prisma.chatMessage.update({
-                    where: { id: newMessage.id },
-                    data: { seen: true, is_read: true },
-                });
-                emitSocketEvent(req, participant.id.toString(), ChatEventEnum.UNREAD_COUNT_UPDATED, {
-                    chatId: chatIdInt,
-                    userId: participant.id,
-                    unreadCount: 0,
-                    increment: 0,
-                });
-                continue;
-            }
-
             await prisma.unreadCount.upsert({
                 where: {
                     userId_chatId: {
                         userId: participant.id,
-                        chatId: chatIdInt,
+                        chatId: parseInt(chatId),
                     },
                 },
                 update: { unreadCount: { increment: 1 } },
-                create: { userId: participant.id, chatId: chatIdInt, unreadCount: 1 },
+                create: { userId: participant.id, chatId: parseInt(chatId), unreadCount: 1 },
             });
 
             emitSocketEvent(req, participant.id.toString(), ChatEventEnum.UNREAD_COUNT_UPDATED, {
-                chatId: chatIdInt,
+                chatId: parseInt(chatId),
                 userId: participant.id,
                 increment: 1,
             });
         }
 
-        if (anyReceiverInRoom) {
-            newMessage.seen = true;
-            newMessage.is_read = true;
-        }
-
         // emit message to chat room
-        emitSocketEvent(req, chatIdInt.toString(), ChatEventEnum.MESSAGE_SENT_EVENT, {
+        emitSocketEvent(req, parseInt(chatId).toString(), ChatEventEnum.MESSAGE_SENT_EVENT, {
             ...newMessage,
             sender: { id: senderId, full_name: req.user.full_name, avatar_url: req.user.avatar_url },
         });
@@ -640,13 +522,6 @@ export async function markChatMessagesAsSeen(req, res) {
             create: { userId, chatId: parseInt(chatId), unreadCount: 0 },
         });
 
-        emitSocketEvent(req, userId.toString(), ChatEventEnum.UNREAD_COUNT_UPDATED, {
-            chatId: parseInt(chatId),
-            userId,
-            unreadCount: 0,
-            increment: 0,
-        });
-
         // notify other participants
         const chat = await prisma.chat.findUnique({ where: { id: parseInt(chatId) }, include: { participants: true } });
         const payload = { chatId: parseInt(chatId), seenBy: userId, messageIds };
@@ -663,4 +538,6 @@ export async function markChatMessagesAsSeen(req, res) {
         return res.status(500).json({ status: 500, message: "Internal Server Error", success: false, error });
     }
 }
+
+
 

@@ -66,6 +66,13 @@ const markMessagesAsSeen = async (chatId, userId, io) => {
     create: { userId, chatId: chatIdInt, unreadCount: 0 },
   });
 
+  io.to(userId.toString()).emit(ChatEventEnum.UNREAD_COUNT_UPDATED, {
+    chatId: chatIdInt,
+    userId,
+    unreadCount: 0,
+    increment: 0,
+  });
+
   io.in(chatIdInt.toString()).emit(ChatEventEnum.MESSAGE_SEEN_EVENT, {
     chatId: chatIdInt,
     seenBy: userId,
@@ -221,29 +228,34 @@ const initializeSocketIO = (io) => {
           });
 
           const otherParticipants = (chat?.participants || [])
-            .map((p) => Number(p.userId))
-            .filter((uid) => uid !== senderId);
+            .map((participant) => Number(participant.id))
+            .filter((participantId) => Number.isInteger(participantId) && participantId !== senderId);
 
           const socketsInRoom = await io.in(chatIdInt.toString()).fetchSockets();
           const usersInRoom = new Set(
             socketsInRoom.map((s) => Number(s.user?.id)).filter(Boolean)
           );
 
-          const presentUsers = otherParticipants.filter((uid) =>
-            usersInRoom.has(uid)
-          );
-
-          if (presentUsers.length > 0) {
-            await prisma.chatMessage.update({
-              where: { id: newMessage.id },
-              data: { seen: true, is_read: true },
-            });
-          }
+          let anyReceiverInRoom = false;
 
           for (const participant of otherParticipants) {
             if (usersInRoom.has(participant)) {
+              anyReceiverInRoom = true;
               await markMessagesAsSeen(chatIdInt, participant, io);
             } else {
+              const isActiveChat = await prisma.activeChat.findFirst({
+                where: {
+                  userId: participant,
+                  chatId: chatIdInt,
+                },
+              });
+
+              if (isActiveChat) {
+                anyReceiverInRoom = true;
+                await markMessagesAsSeen(chatIdInt, participant, io);
+                continue;
+              }
+
               await prisma.unreadCount.upsert({
                 where: {
                   userId_chatId: { userId: participant, chatId: chatIdInt },
@@ -263,10 +275,17 @@ const initializeSocketIO = (io) => {
             }
           }
 
+          if (anyReceiverInRoom) {
+            await prisma.chatMessage.update({
+              where: { id: newMessage.id },
+              data: { seen: true, is_read: true },
+            });
+          }
+
           const fullMessage = {
             ...newMessage,
-            seen: presentUsers.length > 0 ? true : newMessage.seen,
-            is_read: presentUsers.length > 0 ? true : newMessage.is_read,
+            seen: anyReceiverInRoom ? true : newMessage.seen,
+            is_read: anyReceiverInRoom ? true : newMessage.is_read,
             sender: {
               id: senderId,
               full_name: user.full_name,

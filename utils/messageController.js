@@ -293,24 +293,19 @@ export async function sendMessage(req, res) {
                 emitSocketEvent(req, participantId.toString(), ChatEventEnum.MESSAGE_RECEIVED_EVENT, socketMessage);
             } else {
                 const isActiveChat = await prisma.activeChat.findFirst({ where: { userId: participantId, chatId: chatIdInt } });
-                if (isActiveChat) {
-                    anyReceiverInRoom = true;
-                    if (io && typeof markMessagesAsSeen === 'function') {
-                        try { await markMessagesAsSeen(chatIdInt, participantId, io); } catch (err) { console.error('Error while markMessagesAsSeen for active participant:', participantId, err); }
-                    }
-                } else {
+                if (!isActiveChat) {
                     await createNormalNotification({ toUserId: participantId, byUserId: currentUserId, data: { chatId: chatIdInt }, templateKey: 'message_sent', actorName: req.user.full_name });
                     await sendNotificationRelateToMessage({ token: participant.fcm_token, toUserId: participantId, templateKey: 'message_sent', actorName: req.user.full_name, chatId: chatIdInt });
-                    await prisma.unreadCount.upsert({
-                        where: { userId_chatId: { userId: participantId, chatId: chatIdInt } },
-                        update: { unreadCount: { increment: 1 } },
-                        create: { userId: participantId, chatId: chatIdInt, unreadCount: 1 },
-                    });
-
-                    emitSocketEvent(req, participantId.toString(), ChatEventEnum.UNREAD_COUNT_UPDATED, { chatId: chatIdInt, userId: participantId, increment: 1 });
                 }
 
+                await prisma.unreadCount.upsert({
+                    where: { userId_chatId: { userId: participantId, chatId: chatIdInt } },
+                    update: { unreadCount: { increment: 1 } },
+                    create: { userId: participantId, chatId: chatIdInt, unreadCount: 1 },
+                });
+
                 emitSocketEvent(req, participantId.toString(), ChatEventEnum.MESSAGE_RECEIVED_EVENT, socketMessage);
+                emitSocketEvent(req, participantId.toString(), ChatEventEnum.UNREAD_COUNT_UPDATED, { chatId: chatIdInt, userId: participantId, increment: 1 });
             }
         }
 
@@ -446,24 +441,19 @@ export async function uploadAttachmentAndCreateMessage(req, res) {
                 emitSocketEvent(req, participantId.toString(), ChatEventEnum.MESSAGE_RECEIVED_EVENT, socketMessage);
             } else {
                 const isActiveChat = await prisma.activeChat.findFirst({ where: { userId: participantId, chatId: chatIdInt } });
-                if (isActiveChat) {
-                    anyReceiverInRoom = true;
-                    if (io && typeof markMessagesAsSeen === 'function') {
-                        try { await markMessagesAsSeen(chatIdInt, participantId, io); } catch (err) { console.error('Error while markMessagesAsSeen for active participant:', participantId, err); }
-                    }
-                } else {
+                if (!isActiveChat) {
                     await createNormalNotification({ toUserId: participantId, byUserId: currentUserId, data: { chatId: chatIdInt }, templateKey: 'media_sent', actorName: req.user.full_name });
                     await sendNotificationRelateToMessage({ token: participant.fcm_token, toUserId: participantId, templateKey: 'media_sent', actorName: req.user.full_name, chatId: chatIdInt });
-                    await prisma.unreadCount.upsert({
-                        where: { userId_chatId: { userId: participantId, chatId: chatIdInt } },
-                        update: { unreadCount: { increment: 1 } },
-                        create: { userId: participantId, chatId: chatIdInt, unreadCount: 1 },
-                    });
-
-                    emitSocketEvent(req, participantId.toString(), ChatEventEnum.UNREAD_COUNT_UPDATED, { chatId: chatIdInt, userId: participantId, increment: 1 });
                 }
 
+                await prisma.unreadCount.upsert({
+                    where: { userId_chatId: { userId: participantId, chatId: chatIdInt } },
+                    update: { unreadCount: { increment: 1 } },
+                    create: { userId: participantId, chatId: chatIdInt, unreadCount: 1 },
+                });
+
                 emitSocketEvent(req, participantId.toString(), ChatEventEnum.MESSAGE_RECEIVED_EVENT, socketMessage);
+                emitSocketEvent(req, participantId.toString(), ChatEventEnum.UNREAD_COUNT_UPDATED, { chatId: chatIdInt, userId: participantId, increment: 1 });
             }
         }
 
