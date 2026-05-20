@@ -523,8 +523,10 @@ export async function login(req, res) {
     let updateData = {};
 
     // FCM token update
-    if (fcm_token) {
-      updateData.fcm_token = fcm_token;
+    const normalizedFcmToken = typeof fcm_token === 'string' ? fcm_token.trim() : '';
+
+    if (normalizedFcmToken) {
+      updateData.fcm_token = normalizedFcmToken;
     }
 
     // ✅ Location handling (optional + safe)
@@ -564,12 +566,12 @@ export async function login(req, res) {
     });
 
     // ✅ Ensure user setting exists
-    const userSetting = await prisma.userSetting.findFirst({
+    let userSetting = await prisma.userSetting.findFirst({
       where: { userId: user.id },
     });
 
     if (!userSetting) {
-      await prisma.userSetting.create({
+      userSetting = await prisma.userSetting.create({
         data: {
           userId: user.id,
           language: 'sv',

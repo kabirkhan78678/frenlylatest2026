@@ -4,6 +4,10 @@ import { normalizeLanguage } from "./notification.js";
 const prisma = new PrismaClient();
 
 const messageTranslations = {
+    '"name" length must be less than or equal to 15 characters long': {
+        en: 'Name must be less than or equal to 15 characters',
+        sv: 'Namnet får inte vara längre än 15 tecken'
+    },
     "Token Not Provided": { en: "Token Not Provided", sv: "Token saknas" },
     "Access Forbidden": { en: "Access Forbidden", sv: "Atkomst nekad" },
     "Access forbidden": { en: "Access forbidden", sv: "Atkomst nekad" },

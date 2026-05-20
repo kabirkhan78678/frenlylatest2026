@@ -21,7 +21,7 @@ model User {
   personalNumber    String?        @unique
   bio               String?        @db.LongText
   handle            String?        @unique
-  fcm_token         String?
+  fcm_token         String?        @db.LongText
   avatar_url        String?
   fileKey           String?
   cover_photo_url   String?
@@ -477,7 +477,7 @@ model Admin {
   full_name    String?
   password     String
   otp          String?
-  fcm_token    String?
+  fcm_token    String?   @db.LongText
   token        String?
   bankIdToggle Int     @default(1)
 
