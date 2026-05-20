@@ -19,11 +19,13 @@ import { notificationRouter } from "./routes/notification.js";
 import { adminRouter } from "./routes/admin.js";
 import { __filename } from "./controllers/userController.js";
 import { socketAuth } from "./middlewares/socketAuth.js";
+import { responseLocalizationMiddleware } from "./utils/responseLocalization.js";
 
 const __dirname = path.dirname(__filename);
 // dotenv.config();
 // const port = process.env.PORT
 const app = express();
+const isLocal = process.env.NODE_ENV !== "production";
 
 app.use(
   cors()
@@ -34,36 +36,42 @@ app.use(
     extended: true,
   })
 );
+app.use(responseLocalizationMiddleware());
 app.use(express.static('public'));
 
 
 const BANKID_API_URL = "https://appapi2.bankid.com/rp/v6.0/auth";
+const bankIdCertPath = "/var/www/html/bankid/certificate.pem";
+const bankIdKeyPath = "/var/www/html/bankid/private-key.pem";
+const bankIdCaPath = "/var/www/html/bankid/Nordea_RP_CA_v1.pem";
+const appSslCaPath = "/var/www/html/ssl/ca_bundle.crt";
+const appSslKeyPath = "/var/www/html/ssl/private.key";
+const appSslCertPath = "/var/www/html/ssl/certificate.crt";
+const canUseBankIdCertificates = [bankIdCertPath, bankIdKeyPath, bankIdCaPath].every((filePath) => fs.existsSync(filePath));
+const canUseHttpsServerCertificates = [appSslCaPath, appSslKeyPath, appSslCertPath].every((filePath) => fs.existsSync(filePath));
 
 // Load SSL certificates
-const agent = new https.Agent({
+const agent = canUseBankIdCertificates ? new https.Agent({
   rejectUnauthorized: false,
-  cert: fs.readFileSync("/var/www/html/bankid/certificate.pem"),
-  key: fs.readFileSync("/var/www/html/bankid/private-key.pem"),
-  ca: fs.readFileSync("/var/www/html/bankid/Nordea_RP_CA_v1.pem"),
-});
-const cert = fs.readFileSync('/var/www/html/bankid/certificate.pem');
-const key = fs.readFileSync('/var/www/html/bankid/private-key.pem');
-const ca = fs.readFileSync('/var/www/html/bankid/Nordea_RP_CA_v1.pem');
+  cert: fs.readFileSync(bankIdCertPath),
+  key: fs.readFileSync(bankIdKeyPath),
+  ca: fs.readFileSync(bankIdCaPath),
+}) : null;
 
-console.log(cert.toString());  // Ensure these are being read correctly
-console.log(key.toString());
-console.log(ca.toString());
+if (!canUseBankIdCertificates && isLocal) {
+  console.log("BankID certificates not found. BankID routes will be disabled in local mode.");
+}
 
 
 const bankIdClient = axios.create({
   baseURL: 'https://appapi2.bankid.com/rp/v6.0',
   // Base URL for BankID API
-  httpsAgent: new https.Agent({
+  httpsAgent: canUseBankIdCertificates ? new https.Agent({
     rejectUnauthorized: false,
-    ca: fs.readFileSync("/var/www/html/bankid/Nordea_RP_CA_v1.pem"),
-    key: fs.readFileSync("/var/www/html/bankid/private-key.pem"),
-    cert: fs.readFileSync("/var/www/html/bankid/certificate.pem"),    // CA root certificate
-  }),
+    ca: fs.readFileSync(bankIdCaPath),
+    key: fs.readFileSync(bankIdKeyPath),
+    cert: fs.readFileSync(bankIdCertPath),    // CA root certificate
+  }) : undefined,
   // headers: {
   //   'Content-Type': 'application/json',
   // },
@@ -85,6 +93,10 @@ const bankIdMailTemplate = fs.readFileSync(
 
 app.use(express.static('public'));
 const startAuthentication = async (req, res) => {
+  if (!canUseBankIdCertificates) {
+    return res.status(503).json({ error: 'BankID is disabled in local mode' });
+  }
+
   const { endUserIp, email } = req.body; // Fetch these from frontend
 
   if (!endUserIp) {
@@ -125,6 +137,10 @@ const startAuthentication = async (req, res) => {
 };
 
 const collectAuthentication = async (req, res) => {
+  if (!canUseBankIdCertificates) {
+    return res.status(503).json({ error: 'BankID is disabled in local mode' });
+  }
+
   const { orderRef } = req.body;
 
   if (!orderRef) {
@@ -156,6 +172,10 @@ const collectAuthentication = async (req, res) => {
 };
 
 app.post("/bankid/auth", async (req, res) => {
+  if (!canUseBankIdCertificates || !agent) {
+    return res.status(503).json({ error: "BankID is disabled in local mode" });
+  }
+
   try {
     const { endUserIp, personalNumber } = req.body;
 
@@ -217,16 +237,19 @@ app.get("/", (req, res) => {
 
 
 // Read SSL certificate files
-const sslOptions = {
-  ca: fs.readFileSync("/var/www/html/ssl/ca_bundle.crt"),
-  key: fs.readFileSync("/var/www/html/ssl/private.key"),
-  cert: fs.readFileSync("/var/www/html/ssl/certificate.crt"),
-};
+const server = canUseHttpsServerCertificates
+  ? https.createServer({
+    ca: fs.readFileSync(appSslCaPath),
+    key: fs.readFileSync(appSslKeyPath),
+    cert: fs.readFileSync(appSslCertPath),
+  }, app)
+  : createServer(app);
 
-// Create HTTPS server
-const httpsServer = https.createServer(sslOptions, app);
+if (!canUseHttpsServerCertificates && isLocal) {
+  console.log("HTTPS certificates not found. Starting local server over HTTP.");
+}
 
-const io = new Server(httpsServer, {
+const io = new Server(server, {
   pingTimeout: 60000,
   cors: {
     origin: 'https://www.frenly.se:4000',
@@ -239,7 +262,7 @@ io.use(socketAuth);
 
 initializeSocketIO(io);
 
-httpsServer.listen(4000, () => {
+server.listen(4000, () => {
   console.log("Node app is running on port 4000");
 })
 

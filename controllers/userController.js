@@ -117,6 +117,7 @@ export async function signup(req, res) {
         });
       }
       else {
+        try {
         const hashedPassword = await bcrypt.hash(password, 10);
         console.log(hashedPassword)
         // Save the user with the hashed password using Prisma
@@ -142,6 +143,35 @@ export async function signup(req, res) {
           message: "Email verification required. Check your inbox for a confirmation link",
           status: 200,
         });
+        } catch (error) {
+          console.log(error);
+
+          if (error?.code === 'P2002') {
+            const target = Array.isArray(error?.meta?.target) ? error.meta.target.join(',') : String(error?.meta?.target ?? '');
+
+            if (target.includes('handle')) {
+              return res.status(400).json({
+                success: false,
+                message: "User name already exists ,try different User Name",
+                status: 400,
+              });
+            }
+
+            if (target.includes('email')) {
+              return res.status(400).json({
+                success: false,
+                message: "Already have an account, Please Login",
+                status: 400,
+              });
+            }
+          }
+
+          return res.status(500).json({
+            success: false,
+            message: "Internal server error",
+            status: 500,
+          });
+        }
       }
     });
 

@@ -14,16 +14,25 @@ const __dirname = path.dirname(__filename);
 
 export async function createBlog(req, res) {
     try {
-        const { title, body, tags } = req.body;
+        const { title, body, tags, tag } = req.body;
         console.log(req.body);
         console.log(typeof tags);
+        const normalizedTags = tags ?? tag ?? [];
         const schema = Joi.object({
             title: Joi.string().required(),
             body: Joi.string().required(),
-            location: Joi.string().optional().allow('')
+            location: Joi.string().optional().allow(''),
+            tags: Joi.alternatives().try(
+                Joi.array().items(Joi.string()),
+                Joi.string().allow('')
+            ).optional(),
+            tag: Joi.alternatives().try(
+                Joi.array().items(Joi.string()),
+                Joi.string().allow('')
+            ).optional()
         });
-        console.log(JSON.stringify(tags))
-        const tagsnew = JSON.stringify(tags)
+        console.log(JSON.stringify(normalizedTags))
+        const tagsnew = JSON.stringify(normalizedTags)
         const result = schema.validate(req.body);
         if (result.error) {
             const message = result.error.details.map((i) => i.message).join(",");
